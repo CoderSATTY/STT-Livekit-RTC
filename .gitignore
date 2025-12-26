@@ -1,0 +1,25 @@
+# Node
+stt/token-server/node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+*.env
+stt/.env
+
+
+# API Keys / Credentials
+*.json
+!package.json   # keep package.json
+!package-lock.json
+
+
+# OS files
+.DS_Store
+Thumbs.db

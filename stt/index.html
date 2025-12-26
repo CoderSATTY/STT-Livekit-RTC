@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiveKit Voice Agent</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+        #status { margin-bottom: 1rem; color: #666; font-weight: bold; }
+        #transcripts { border: 1px solid #ddd; height: 300px; overflow-y: auto; padding: 1rem; background: #f9f9f9; }
+        button { padding: 10px 20px; cursor: pointer; font-size: 1rem; }
+        .entry { margin-bottom: 0.5rem; border-bottom: 1px solid #eee; padding-bottom: 0.5rem; }
+    </style>
+</head>
+<body>
+
+    <h1>🎙️ Voice Agent</h1>
+    <div id="status">Ready to connect...</div>
+    <button id="connectBtn">Connect to Room</button>
+    
+    <h3>Transcripts</h3>
+    <div id="transcripts"></div>
+    
+    <audio id="agentAudio" autoplay></audio>
+
+    <script type="module">
+        import { Room, RoomEvent, createLocalAudioTrack } from 'https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.esm.mjs';
+
+        const LIVEKIT_URL = "wss://voice-cancellation-agfqmecc.livekit.cloud";
+        const TOKEN_SERVER = "http://localhost:3000/token";
+
+        const statusDiv = document.getElementById('status');
+        const transcriptDiv = document.getElementById('transcripts');
+        const connectBtn = document.getElementById('connectBtn');
+        const agentAudio = document.getElementById('agentAudio');
+
+        connectBtn.onclick = async () => {
+            connectBtn.disabled = true;
+            statusDiv.innerText = "Connecting...";
+
+            try {
+                // 1. Fetch the JSON object from the server
+                console.log("Fetching token from", TOKEN_SERVER);
+                const response = await fetch(TOKEN_SERVER);
+                const data = await response.json();
+                
+                // DEBUG: Print exactly what we got to the Console
+                console.log("Server response:", data);
+
+                // 2. Extract ONLY the string part
+                const tokenString = data.token; 
+
+                if (!tokenString) {
+                    throw new Error("Token is empty! Server returned: " + JSON.stringify(data));
+                }
+
+                // 3. Connect to LiveKit
+                const room = new Room();
+                
+                room.on(RoomEvent.DataReceived, (payload) => {
+                    const text = new TextDecoder().decode(payload);
+                    const p = document.createElement('div');
+                    p.className = 'entry';
+                    p.innerText = text;
+                    transcriptDiv.appendChild(p);
+                    transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+                });
+
+                room.on(RoomEvent.TrackSubscribed, (track) => {
+                    if (track.kind === 'audio') {
+                        track.attach(agentAudio);
+                    }
+                });
+
+                console.log("Connecting with token:", tokenString.substring(0, 20) + "...");
+                await room.connect(LIVEKIT_URL, tokenString);
+                
+                statusDiv.innerText = "Connected! Speak now.";
+
+                const localTrack = await createLocalAudioTrack();
+                await room.localParticipant.publishTrack(localTrack);
+
+            } catch (error) {
+                console.error("Connection Failed:", error);
+                statusDiv.innerText = "Error: " + error.message;
+                connectBtn.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>
