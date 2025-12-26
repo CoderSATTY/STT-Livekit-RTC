@@ -19,7 +19,7 @@ stt/.env
 !package.json   # keep package.json
 !package-lock.json
 
-
+chatterbox-tts-voices/
 # OS files
 .DS_Store
 Thumbs.db
