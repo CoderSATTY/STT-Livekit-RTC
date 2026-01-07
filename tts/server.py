@@ -1,27 +1,32 @@
 import torch
-import torchaudio
 import numpy as np
 import base64
 import asyncio
-import re
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
-from chatterbox.tts_turbo import ChatterboxTurboTTS
+from kokoro import KPipeline
 
 app = FastAPI()
 
-print("Loading Chatterbox Turbo...")
+def fixed_infer(model, ps, pack, speed=1):
+    if callable(speed):
+        speed = speed(len(ps))
+    return model(ps, pack, speed, return_output=True)
+
+KPipeline.infer = staticmethod(fixed_infer)
+
+print("Loading Kokoro...")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-model = ChatterboxTurboTTS.from_pretrained(device=DEVICE)
+pipeline = KPipeline(lang_code='a', repo_id='hexgrad/Kokoro-82M', device=DEVICE)
 
-REFERENCE_AUDIO_PATH = "/home/cloud/STT-Livekit-RTC/test_audio_2.wav" 
+print("Loading Voice Tensor...")
+voice_tensor = torch.load('british_voice_style.pt', weights_only=True)
+if voice_tensor.ndim == 3:
+    voice_tensor = voice_tensor[-1]
+if voice_tensor.ndim == 1:
+    voice_tensor = voice_tensor.unsqueeze(0)
+
 print(f"Model loaded on {DEVICE}")
-
-
-def split_text(text):
-
-    chunks = re.split(r'(?<=[.!?]) +', text)
-    return [c.strip() for c in chunks if c.strip()]
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -29,42 +34,53 @@ async def websocket_endpoint(websocket: WebSocket):
     
     try:
         while True:
-            
             data = await websocket.receive_text()
             print(f"Received text: {data[:]}...")
 
-            sentences = split_text(data)
+            stream = pipeline(
+                data, 
+                voice=voice_tensor, 
+                speed=1.0, 
+                split_pattern=r'(?<=[.!?]) +'
+            )
 
-            for i, sentence in enumerate(sentences):
-
-                print(f"Generating chunk {i+1}/{len(sentences)}: {sentence[:]}...")
-               
-                wav_tensor = await asyncio.to_thread(
-                    model.generate, 
-                    sentence, 
-                    audio_prompt_path=REFERENCE_AUDIO_PATH
-                )
-
-                audio_data = wav_tensor.cpu().numpy().squeeze()
-
-                audio_bytes = audio_data.astype(np.float32).tobytes()
-     
+            chunk_id = 0
+            while True:
+                # Run inference in a separate thread to keep WS responsive
+                result = await asyncio.to_thread(next, stream, None)
+                
+                if result is None:
+                    break
+                
+                _, _, audio = result
+                
+                if isinstance(audio, torch.Tensor):
+                    audio = audio.cpu().numpy()
+                
+                audio_bytes = audio.astype(np.float32).tobytes()
                 encoded_audio = base64.b64encode(audio_bytes).decode('utf-8')
                 
                 await websocket.send_json({
                     "audio": encoded_audio,
-                    "sample_rate": model.sr,
-                    "chunk_id": i,
-                    "is_last": (i == len(sentences) - 1)
+                    "sample_rate": 24000,
+                    "chunk_id": chunk_id,
+                    "is_last": False 
                 })
+                
+                chunk_id += 1
 
-                await asyncio.sleep(0.01)
+            # Send a marker indicating the stream for this text is finished
+            await websocket.send_json({
+                "audio": "",
+                "sample_rate": 24000,
+                "chunk_id": chunk_id,
+                "is_last": True
+            })
 
             print("Finished streaming response.")
 
     except Exception as e:
         print(f"Connection closed or error: {e}")
-
 
 @app.get("/")
 async def get():
